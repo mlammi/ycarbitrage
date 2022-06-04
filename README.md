@@ -1,2 +1,2 @@
 # ycarbitrage
-Implementing yield curve arbitrage as in Duarte et al. (2006) in the USD swap markets in 2012-2021
+Implementing yield curve arbitrage in the USD swap markets in 2012-2021. Main reference paper Duarte et al. (2006)
