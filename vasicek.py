@@ -19,7 +19,7 @@ import pandas as pd
 import numpy as np
 from scipy import optimize
 from sklearn.metrics import mean_squared_error
-from utils import threadify
+from scipy.special import logsumexp
 import random
 
 
@@ -130,7 +130,8 @@ def optimize_parameters(k1, theta1, sigma1, k2, theta2, sigma2, step, date, cali
         return mean_squared_error(calibration_period_data.loc[:, 'USD2YS':'USD9YS'], model_data.loc[:, 'USD2YS':'USD9YS'])
 
     initial_parameters_for_minimize = np.array([k1, theta1, sigma1, k2, theta2, sigma2])
-    bnds = [(1e-6, None), (1e-6, None), (1e-6, None), (1e-6, None), (1e-6, None), (1e-6, None)]
+    bnds = [(1e-8, None), (1e-8, None), (1e-8, None), (1e-8, None), (1e-8, None), (1e-8, None)]
+    # optimal_full = optimize.basinhopping(func=optimize_helper, x0=initial_parameters_for_minimize)
     optimal_full = optimize.minimize(fun=optimize_helper, x0=initial_parameters_for_minimize, method='Nelder-Mead', bounds=bnds)
     optimal_par = optimal_full.x
     optimal_val = optimal_full.fun
