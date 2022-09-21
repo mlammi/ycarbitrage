@@ -19,6 +19,7 @@ import ast
 # Creating the bookkeeping
 
 
+# Creating an empty dataframe ("book"), where the open trade information will be stored. This book is filled and cleared each month
 def create_book():
     book_columns = ['date', 'Trade type', 'M from open', 'Maturity', 'M to float', 'M to fixed', 'S of model', 'S of trade', 'S of H1', 'S of H10', 'Latest 3ML', 'Previous total dirty',
                     'Previous trade dirty', 'Previous H1 dirty', 'Previous H10 dirty', 'Nominal trade', 'Nominal H1', 'Nominal H10', 'Weight H1', 'Weight H10', 'Initial mispricing', 'Current mispricing',
@@ -27,11 +28,13 @@ def create_book():
     return book_df
 
 
+# Creating the dictionary of dataframes, where monthly dataframes with open trade information will be stored
 def create_dict_of_books():
     first_book_df = create_book()
     return {'First book': first_book_df}
 
 
+# Adding trade information to the "book" of trades, if there is a large enough mispricing
 def add_to_book(date, book_df, model_data, market_data, libor_data, weight_data, limit, nominal, step_float, step_fixed):
     misprice = choose_largest_mispricing_and_hedge_rates(date, model_data, market_data, limit)
     libor_date = libor_data[libor_data['date2'] == date].values[0][1]
@@ -51,6 +54,7 @@ def add_to_book(date, book_df, model_data, market_data, libor_data, weight_data,
         return book_df
 
 
+# Helper function for getting the nominal and weight information for a trade to be added to the "book"
 def set_nominals_and_weights(date, trade_nominal, weight_data, maturity):
     weight_date = weight_data[weight_data['date2'] == date].values[0][maturity-1]
     # weight_date = ast.literal_eval(weight_date) #REMOVE IF WEIGHT DATA NOT IMPORTED FROM XLSX-FILE!
@@ -59,7 +63,7 @@ def set_nominals_and_weights(date, trade_nominal, weight_data, maturity):
     return trade_nominal, w1 * trade_nominal, w10 * trade_nominal, w1, w10
 
 
-# Choosing the largest mispricing above given limit in a given date
+# Choosing the largest mispricing given a limit in a given date and returning the maturity of the largest mispriced rate, the mispriced rate, the market rate for corresponding maturity, hedge 1y- and 10y- rates and the largest mispricing
 def choose_largest_mispricing_and_hedge_rates(date, model_data, market_data, limit):
     model_date = model_data[model_data['date2'] == date].values[0]
     market_date = market_data[market_data['date2'] == date].values[0]
@@ -82,6 +86,7 @@ def choose_largest_mispricing_and_hedge_rates(date, model_data, market_data, lim
     return max_mispricing_maturity, market_mispricing_rate, model_mispricing_rate, h1_rate, h10_rate, max_mispricing
 
 
+# Update the "book": months from opening / time to fixed / time to float / (rate) mispricing in the given month / latest 3M Libor fixing if 3 months has passed since last fixing
 def update_book(book_df, libor_data, market_data, date):
     market_date = market_data[market_data['date2'] == date].values[0]
     new_book_df = book_df
@@ -101,6 +106,7 @@ def update_book(book_df, libor_data, market_data, date):
     return new_book_df
 
 
+# Alternative way for updating the "book" if market data is missing: months from opening / time to fixed / time to float / latest 3M Libor fixing if 3 months has passed since last fixing
 def update_book2(book_df, libor_data, date):
     new_book_df = book_df
     number_of_rows = len(book_df.index)
@@ -117,6 +123,7 @@ def update_book2(book_df, libor_data, date):
     return new_book_df
 
 
+# Update latest (previous) dirty prices for hedge 1y-, hedge 10y- and mispriced trade and placing these values to the "book" / Could be just taken from current dirty prices, but this is a sort of double check
 def update_latest_dirty_prices(date, book_df, cub_libor_data, cub_swap_data, cub_ois_data, convention_float, convention_fixed, step_float, step_fixed):
     new_book_df = book_df
     len_of_book_df = len(book_df.index)
@@ -142,6 +149,7 @@ def update_latest_dirty_prices(date, book_df, cub_libor_data, cub_swap_data, cub
     return new_book_df
 
 
+# Basically updating the latest dirty prices but taking into account that hedge 1y prices may need to be set at 0 if maturity limit has exceeded
 def update_current_dirty_prices(date, book_df, cub_libor_data, cub_swap_data, cub_ois_data, convention_float, convention_fixed, step_float, step_fixed):
     new_book_df = book_df
     len_of_book_df = len(book_df.index)
@@ -176,6 +184,7 @@ def update_current_dirty_prices(date, book_df, cub_libor_data, cub_swap_data, cu
     return new_book_df
 
 
+# Cleaning the "book" from trades that have converged below 1 bps and returning the cleaned book and number of closed trades
 def clean_book_convergence(book_df):
     new_book_df = create_book()
     close_count_convergence = 0
@@ -183,10 +192,11 @@ def clean_book_convergence(book_df):
         if check_convergence(row):
             new_book_df = new_book_df.append(row, ignore_index=True)
         else:
-            close_count_convergence += 1
+            close_count_convergence += 3
     return new_book_df, close_count_convergence
 
 
+# Helper function to check if the mispricing of a given trade has converged below 1bps
 def check_convergence(position_data):
     if position_data[21] >= -0.0001 and position_data[1] == 'Receiver':
         return False
@@ -196,6 +206,7 @@ def check_convergence(position_data):
         return True
 
 
+# Cleaning the "book" from trades that have passed the maturity limit and returning the cleaned "book" and the number of closed trades
 def clean_book_maturity(book_df):
     new_book_df = create_book()
     close_count_maturity = 0
@@ -203,10 +214,11 @@ def clean_book_maturity(book_df):
         if check_maturity(row):
             new_book_df = new_book_df.append(row, ignore_index=True)
         else:
-            close_count_maturity += 1
+            close_count_maturity += 2
     return new_book_df, close_count_maturity
 
 
+# Helper function to check if a given trade has passed or is equal to 12-month maturity
 def check_maturity(position_data):
     if position_data[2] >= 12:
         return False

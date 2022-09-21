@@ -3,7 +3,7 @@ Implementing the Cox-Ingersoll Ross (CIR) 2-factor short rate model without shif
 For notation, please refer to the book 'Interest Rate Models - Theory and Practice' (2006) by Damiano & Mercurio.
 
 Other notes:
--t1 is the starting time and t2 is maturity. For current moments t1 is 0. For forward starting swaps t1 > 0
+-t1 is the starting time and t2 is maturity (in years). For current moments t1 is 0. For forward starting swaps t1 > 0
 -step refers to the payment schedule intervals and is to be provided as per year step, i.e. 0.25 years for 3 months etc
 -Check the repository data for indexes and columns
 """
@@ -17,6 +17,8 @@ import pandas as pd
 import numpy as np
 from scipy import optimize
 from sklearn.metrics import mean_squared_error
+from pyomo.environ import *
+from pyomo.opt import SolverStatus, TerminationCondition
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -24,6 +26,7 @@ from sklearn.metrics import mean_squared_error
 
 # Helper function for zero coupon bond pricing
 def h(k, sigma):
+    # return (k**2 + 2*sigma**2)**(1/2)
     return math.sqrt(math.pow(k, 2) + 2 * math.pow(sigma, 2))
 
 
@@ -32,18 +35,30 @@ def b(t1, t2, k, sigma):
     h_val = h(k, sigma)
     nom = 2 * (np.exp((t2 - t1) * h_val) - 1)
     den = 2 * h_val + (k + h_val) * (np.exp((t2 - t1) * h_val) - 1)
+
+    # nom = 2 * (exp((t2 - t1) * h_val) - 1)
+    # den = 2 * h_val + (k + h_val) * (exp((t2 - t1) * h_val) - 1)
+
     return nom/den
 
 
 # Helper function for zero coupon bond pricing and solving partial derivatives of swap rates w.r.t. CIR factors - Float
 def a(t1, t2, k, sigma, theta):
     h_val = h(k, sigma)
+
     sigma_sq = math.pow(sigma, 2)
     nom = 2 * h_val * np.exp((k + h_val) * (t2-t1) / 2)
     den = 2 * h_val + (k + h_val) * (np.exp((t2 - t1) * h_val) - 1)
+
+    # sigma_sq = sigma**2
+    # nom = 2 * h_val * exp((k + h_val) * (t2-t1) / 2)
+    # den = 2 * h_val + (k + h_val) * (exp((t2 - t1) * h_val) - 1)
+
     pow_exp = 2 * k * theta / sigma_sq
     pow_term = nom/den
+
     return math.pow(pow_term, pow_exp)
+    # return pow_term**pow_exp
 
 
 # Zero coupon bond pricing when 6 parameters, 2 factors, starting time t1 and maturity t2 are known - Float
@@ -53,6 +68,7 @@ def zc_price(k1, theta1, sigma1, k2, theta2, sigma2, x, y, t1, t2):
     b1 = b(t1, t2, k1, sigma1)
     b2 = b(t1, t2, k2, sigma2)
     e_temp = np.exp(-x * b1 - y * b2)
+    # e_temp = exp(-x * b1 - y * b2)
     return a1 * a2 * e_temp
 
 
@@ -77,7 +93,7 @@ def calib_period(swap_data, date, calib_period_len):
     calib_period_start_index = date_index[0] - calib_period_len
     if calib_period_start_index < 0:
         calib_period_start_index = 0
-    return swap_data[calib_period_start_index:date_index[0]]
+    return swap_data[calib_period_start_index:date_index[0]].reset_index(drop=True)
 
 
 # Helper function for all the dates of data that follow a provided date (inclusive) - Array
@@ -92,6 +108,12 @@ def choose_dates(swap_data, date):
 def find_s1_s10_rates(data, date):
     date_data = data[data['date'] == date]
     return [date_data['USD1YS'].values[0], date_data['USD10YS'].values[0]]
+
+
+# Helper function for sum of squared differences between two dataframes - Float
+def sum_of_squared(df1, df2):
+    return ((df1 - df2) ** 2).values.sum()
+
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # Solving factors x and y
@@ -124,6 +146,14 @@ def xy_in_calib_period(k1, theta1, sigma1, k2, theta2, sigma2, t1, step, calib_p
 
 # Optimize the 6 parameters in a given date, based on past calib_period_len months, when the calibration period, market swaps and (initial) 6 parameters are provided - Array
 def optimize_parameters(k1, theta1, sigma1, k2, theta2, sigma2, step, date, calib_period_len, swap_data):
+
+    k1 = 0.01819632
+    theta1 = 0.0835597527412136
+    sigma1 = 0.054829
+    k2 = 0.4628664
+    theta2 = 0.05191692462447047
+    sigma2 = 0.0257381
+
     calibration_period_data = calib_period(swap_data, date, calib_period_len)
     xy_data_in_calib_period = xy_in_calib_period(k1, theta1, sigma1, k2, theta2, sigma2, 0, step, calibration_period_data)
 
@@ -132,25 +162,35 @@ def optimize_parameters(k1, theta1, sigma1, k2, theta2, sigma2, step, date, cali
         return mean_squared_error(calibration_period_data.loc[:, 'USD2YS':'USD9YS'], model_data.loc[:, 'USD2YS':'USD9YS'])
 
     initial_parameters_for_minimize = np.array([k1, theta1, sigma1, k2, theta2, sigma2])
-    bnds = [(1e-8, None), (1e-8, None), (1e-8, None), (1e-8, None), (1e-8, None), (1e-8, None)]
-    cons = ({'type': 'ineq', 'fun': lambda x: 2 * x[0] * x[1] - math.pow(x[2], 2) - 1e-10},
-            {'type': 'ineq', 'fun': lambda x: 2 * x[3] * x[4] - math.pow(x[5], 2) - 1e-10},
+    # bnds = [(1e-6, None), (1e-6, None), (1e-6, None), (1e-6, None), (1e-6, None), (1e-6, None)]
+
+    cons = ({'type': 'ineq', 'fun': lambda x: 2 * x[0] * x[1] - math.pow(x[2], 2) - 1e-6},
+            {'type': 'ineq', 'fun': lambda x: 2 * x[3] * x[4] - math.pow(x[5], 2) - 1e-6},
             {'type': 'ineq', 'fun': lambda x: x[0] - 1e-6},
             {'type': 'ineq', 'fun': lambda x: x[1] - 1e-6},
             {'type': 'ineq', 'fun': lambda x: x[2] - 1e-6},
             {'type': 'ineq', 'fun': lambda x: x[3] - 1e-6},
             {'type': 'ineq', 'fun': lambda x: x[4] - 1e-6},
-            {'type': 'ineq', 'fun': lambda x: x[5] - 1e-6})
+            {'type': 'ineq', 'fun': lambda x: x[5] - 1e-6},
+            {'type': 'ineq', 'fun': lambda x: 0.15 - x[1] - 1e-6},
+            {'type': 'ineq', 'fun': lambda x: 0.15 - x[2] - 1e-6},
+            {'type': 'ineq', 'fun': lambda x: 0.15 - x[4] - 1e-6},
+            {'type': 'ineq', 'fun': lambda x: 0.15 - x[5] - 1e-6})
 
-    def constr_fun(x):
-        r1 = 2 * x[0] * x[1] - math.pow(x[2], 2) - 0*(x[3] + x[4] + x[5])
-        r2 = 2 * x[3] * x[4] - math.pow(x[5], 2) - 0*(x[0] + x[1] + x[2])
-        return r1, r2
-    lb = [1e-10, 1e-10]
-    ub = [np.inf, np.inf]
-    nlc = optimize.NonlinearConstraint(constr_fun, lb, ub)
+    # cons2 = ({'type': 'ineq', 'fun': lambda x: 2 * x[0] * x[1] - math.pow(x[2], 2) - 1e-6}, {'type': 'ineq', 'fun': lambda x: 2 * x[3] * x[4] - math.pow(x[5], 2) - 1e-6})
 
-    optimal_full = optimize.minimize(fun=optimize_helper, x0=initial_parameters_for_minimize, method='COBYLA', constraints=cons)
+    '''
+    def constr_fun1(x):
+        return 2 * x[0] * x[1] - math.pow(x[2], 2)
+    
+    def constr_fun2(x):
+        return 2 * x[3] * x[4] - math.pow(x[5], 2)
+
+    nlc1 = optimize.NonlinearConstraint(constr_fun1, 1e-10, np.inf)
+    nlc2 = optimize.NonlinearConstraint(constr_fun2, 1e-10, np.inf)
+    '''
+
+    optimal_full = optimize.minimize(fun=optimize_helper, x0=initial_parameters_for_minimize, method='COBYLA', constraints=cons, options={'catol': 1e-7})
     # optimal_full = optimize.minimize(fun=optimize_helper, x0=initial_parameters_for_minimize, method='Nelder-Mead', bounds=bnds)
     optimal_par = optimal_full.x
     optimal_val = optimal_full.fun
@@ -159,6 +199,98 @@ def optimize_parameters(k1, theta1, sigma1, k2, theta2, sigma2, step, date, cali
     s = find_s1_s10_rates(swap_data, date)
     xy = solve_xy(optimal_par[0], optimal_par[1], optimal_par[2], optimal_par[3], optimal_par[4], optimal_par[5], 0, step, s[0], s[1])
     return [optimal_par[0], optimal_par[1], optimal_par[2], optimal_par[3], optimal_par[4], optimal_par[5], xy[0], xy[1], optimal_val, optimal_suc, optimal_mes]
+
+
+def optimize_parameters2(k1, theta1, sigma1, k2, theta2, sigma2, step, date, calib_period_len, swap_data):
+
+    # k1 = 0.01819632
+    # theta1 = 0.0835597527412136
+    # sigma1 = 0.054829
+    # k2 = 0.4628664
+    # theta2 = 0.05191692462447047
+    # sigma2 = 0.0257381
+
+    # initial_parameters_for_minimize = np.array([k1, theta1, sigma1, k2, theta2, sigma2])
+    # print(initial_parameters_for_minimize)
+
+    calibration_period_data = calib_period(swap_data, date, calib_period_len)
+    xy_data_in_calib_period = xy_in_calib_period(k1, theta1, sigma1, k2, theta2, sigma2, 0, step, calibration_period_data)
+
+    # print(len(calibration_period_data))
+    # print(len(xy_data_in_calib_period))
+    # print(calibration_period_data)
+
+    mdl = ConcreteModel()
+    mdl.k1 = Var(bounds=(1e-6, None), initialize=0.01819632)
+    mdl.theta1 = Var(bounds=(1e-6, 1), initialize=0.0835597527412136)
+    mdl.sigma1 = Var(bounds=(1e-6, 1), initialize=0.054829)
+    mdl.k2 = Var(bounds=(1e-6, None), initialize=0.4628664)
+    mdl.theta2 = Var(bounds=(1e-6, 1), initialize=0.05191692462447047)
+    mdl.sigma2 = Var(bounds=(1e-6, 1), initialize=0.0257381)
+    mdl.con1 = Constraint(expr=2*mdl.k1*mdl.theta1 >= mdl.sigma1**2+1e-10)
+    mdl.con2 = Constraint(expr=2*mdl.k2*mdl.theta2 >= mdl.sigma2**2+1e-10)
+
+    # mdl.k1 = Var(bounds=(1e-6, None), initialize=k1)
+    # mdl.theta1 = Var(bounds=(1e-6, 1), initialize=theta1)
+    # mdl.sigma1 = Var(bounds=(1e-6, 1), initialize=sigma1)
+    # mdl.k2 = Var(bounds=(1e-6, None), initialize=k2)
+    # mdl.theta2 = Var(bounds=(1e-6, 1), initialize=theta2)
+    # mdl.sigma2 = Var(bounds=(1e-6, 1), initialize=sigma2)
+    # mdl.con1 = Constraint(expr=2 * mdl.k1 * mdl.theta1 >= mdl.sigma1 ** 2 + 1e-10)
+    # mdl.con2 = Constraint(expr=2 * mdl.k2 * mdl.theta2 >= mdl.sigma2 ** 2 + 1e-10)
+
+    # mdl.k1 = Var(bounds=(1e-6, None))
+    # mdl.theta1 = Var(bounds=(1e-6, 0.5))
+    # mdl.sigma1 = Var(bounds=(1e-6, 0.5))
+    # mdl.k2 = Var(bounds=(1e-6, None))
+    # mdl.theta2 = Var(bounds=(1e-6, 0.5))
+    # mdl.sigma2 = Var(bounds=(1e-6, 0.5))
+    # mdl.con1 = Constraint(expr=2 * mdl.k1 * mdl.theta1 >= mdl.sigma1 ** 2 + 1e-10)
+    # mdl.con2 = Constraint(expr=2 * mdl.k2 * mdl.theta2 >= mdl.sigma2 ** 2 + 1e-10)
+
+    def SSE(calidata, xydata, p1, p2, p3, p4, p5, p6):
+        sumofsqs = 0
+        for index, row in calidata.iterrows():
+            # print(index)
+            x = xydata[index][0]
+            y = xydata[index][1]
+            for i in range(2, 10):
+                model_r = swap_rate(p1, p2, p3, p4, p5, p6, x, y, 0, i, 0.5)
+                cali_r = row.iloc[i]
+                sumofsqs += (model_r-cali_r)**2
+        return sumofsqs
+
+    # mdl.obj = Objective(expr=sum_of_squared(calibration_period_data.loc[:, 'USD2YS':'USD9YS'], swap_rates_in_period(mdl.k1, mdl.theta1, mdl.sigma1, mdl.k2, mdl.theta2, mdl.sigma2, step, xy_data_in_calib_period).loc[:, 'USD2YS':'USD9YS']), sense=minimize)
+    # mdl.obj = Objective(expr=calibration_period_data.loc[0, 'USD5YS']-swap_rates_in_date(mdl.k1, mdl.theta1, mdl.sigma1, mdl.k2, mdl.theta2, mdl.sigma2, xy_data_in_calib_period[0][0], xy_data_in_calib_period[0][1], 0.5)[5])
+    mdl.obj = Objective(expr=SSE(calibration_period_data, xy_data_in_calib_period, mdl.k1, mdl.theta1, mdl.sigma1, mdl.k2, mdl.theta2, mdl.sigma2), sense=minimize)
+
+
+    # SolverFactory('scipampl', executable=r'C:\Users\Miro_\Desktop\koodit\baron\scipampl-6.0.0.win.x86_64.intel.opt.spx2.exe').solve(mdl)
+    # SolverFactory('ipopt').solve(mdl)
+    solver = SolverFactory('ipopt')
+    solver.options['max_iter'] = 5000  # number of iterations you wish
+    solver.solve(mdl)
+
+    # model = mdl.create_instance()
+    # model.obj1.deactivate()
+    # model.obj = Objective(expr=SSE(calibration_period_data, xy_data_in_calib_period, model.k1, model.theta1, model.sigma1, model.k2, model.theta2, model.sigma2), sense=minimize)
+
+    results = solver.solve(mdl)
+    # mdl.pprint()
+
+    if (results.solver.status == SolverStatus.ok) and (results.solver.termination_condition == TerminationCondition.optimal):
+        print("this is feasible and optimal")
+    elif results.solver.termination_condition == TerminationCondition.infeasible:
+        print("do something about it? or exit?")
+    else:
+        # something else is wrong
+        print(str(results.solver))
+
+    s = find_s1_s10_rates(swap_data, date)
+    xy = solve_xy(mdl.k1(), mdl.theta1(), mdl.sigma1(), mdl.k2(), mdl.theta2(), mdl.sigma2(), 0, step, s[0], s[1])
+    optimal_val, optimal_suc, optimal_mes = 'jee', 'jee', 'jee'
+    print([mdl.k1(), mdl.theta1(), mdl.sigma1(), mdl.k2(), mdl.theta2(), mdl.sigma2(), xy[0], xy[1], optimal_val, optimal_suc, optimal_mes])
+    return [mdl.k1(), mdl.theta1(), mdl.sigma1(), mdl.k2(), mdl.theta2(), mdl.sigma2(), xy[0], xy[1], optimal_val, optimal_suc, optimal_mes]
 
 
 # Optimizing parameters after a date for all dates (inclusive) - Dataframe
@@ -199,14 +331,33 @@ def swap_rates_in_period(k1, theta1, sigma1, k2, theta2, sigma2, step, xy_data):
 def swap_rates_after_date(k1, theta1, sigma1, k2, theta2, sigma2, step, date, calib_period_len, swap_data):
     parameters = [k1, theta1, sigma1, k2, theta2, sigma2]
     dates = choose_dates(swap_data, date)
+
+    '''
+    mdl = ConcreteModel()
+    mdl.k1 = Var(bounds=(1e-6, None), initialize=0.01819632)
+    mdl.theta1 = Var(bounds=(1e-6, 0.3), initialize=0.0835597527412136)
+    mdl.sigma1 = Var(bounds=(1e-6, 0.3), initialize=0.054829)
+    mdl.k2 = Var(bounds=(1e-6, None), initialize=0.4628664)
+    mdl.theta2 = Var(bounds=(1e-6, 0.3), initialize=0.05191692462447047)
+    mdl.sigma2 = Var(bounds=(1e-6, 0.3), initialize=0.0257381)
+    mdl.con1 = Constraint(expr=2 * mdl.k1 * mdl.theta1 >= mdl.sigma1 ** 2 + 1e-10)
+    mdl.con2 = Constraint(expr=2 * mdl.k2 * mdl.theta2 >= mdl.sigma2 ** 2 + 1e-10)
+    mdl.obj1 = Objective(expr=mdl.k1 - mdl.k2, sense=minimize)
+    solver = SolverFactory('ipopt')
+    solver.options['max_iter'] = 5000  # number of iterations you wish
+    '''
+
     rates_of_months = []
     parameters_of_months = []
     for date_temp in dates:
         parameters = optimize_parameters(parameters[0], parameters[1], parameters[2], parameters[3], parameters[4], parameters[5], step, date_temp, calib_period_len, swap_data)
+        # parameters = optimize_parameters(parameters[0], parameters[1], parameters[2], parameters[3], parameters[4], parameters[5], step, date_temp, calib_period_len, swap_data, mdl, solver)
+        # parameters = optimize_parameters(k1, theta1, sigma1, k2, theta2, sigma2, step, date_temp, calib_period_len, swap_data)
         rates = swap_rates_in_date(parameters[0], parameters[1], parameters[2], parameters[3], parameters[4], parameters[5], parameters[6], parameters[7], step)
         rates_of_months.append([date_temp, rates[0], rates[1], rates[2], rates[3], rates[4], rates[5], rates[6], rates[7], rates[8], rates[9]])
         parameters_of_months.append([date_temp, parameters[0], parameters[1], parameters[2], parameters[3], parameters[4], parameters[5], parameters[6], parameters[7], parameters[8], parameters[9], parameters[10]])
         print(date_temp)
+        print(parameters)
     return pd.DataFrame(rates_of_months, columns=['date', 'USD1YS', 'USD2YS', 'USD3YS', 'USD4YS', 'USD5YS', 'USD6YS', 'USD7YS', 'USD8YS', 'USD9YS', 'USD10YS']), pd.DataFrame(parameters_of_months, columns=['date', 'k1', 'theta1', 'sigma1', 'k2', 'theta2', 'sigma2', 'x', 'y', 'value', 'success', 'message'])
 
 

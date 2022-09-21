@@ -30,7 +30,7 @@ from dateutil.relativedelta import relativedelta
 # Deriving the necessary curves
 
 
-# Solving OIS discount factors in a month. Inputs: Series (date, 1 month OIS, 2 month OIS...11 months OIS, 1 year OIS, 2 year OIS...10 year OIS) / Date for which OIS dfs are solved / Day count convention of OIS rates
+# Solving OIS discount factors in a month. Inputs: Series (date, 1 week, 2 weeks, 3 weeks, 1 month OIS, 2 month OIS...11 months OIS, 1 year OIS, 2 year OIS...10 year OIS) / Date for which OIS dfs are solved / Day count convention of OIS rates
 def bootstrap_ois_month(ois_data, date, convention_ois):
     discount_factors = [date]
 
@@ -55,8 +55,9 @@ def bootstrap_ois_month(ois_data, date, convention_ois):
         discount_factors.append(nominator/denominator)
 
     # Calculating the OIS discount factors for 27 months, 30 months, 33 months and 36 months (3 years), CHECK
-    for m in range(28, 32):
         temp = 0
+    for m in range(28, 32):
+        # temp = 0
         t1 = (m+temp) - 25
         t2 = (m+temp) - 13
         t3 = (m+temp) - 1
@@ -66,8 +67,9 @@ def bootstrap_ois_month(ois_data, date, convention_ois):
         discount_factors.append(nominator/denominator)
 
     # Calculating the OIS discount factors for 39 months, 42 months, 45 months and 48 months (4 years)
-    for n in range(32, 36):
         temp = 7
+    for n in range(32, 36):
+        # temp = 7
         t1 = (n+temp) - 36
         t2 = (n+temp) - 24
         t3 = (n+temp) - 12
@@ -78,15 +80,16 @@ def bootstrap_ois_month(ois_data, date, convention_ois):
         discount_factors.append(nominator/denominator)
 
     # Calculating the OIS discount factors for 51 months, 54 months, 57 months and 60 months (5 years)
-    for z in range(36, 40):
         temp = 15
+    for z in range(36, 40):
+        # temp = 15
         t1 = (z+temp) - 48
         t2 = (z+temp) - 36
         t3 = (z+temp) - 24
         t4 = (z+temp) - 12
         t5 = (z+temp)
         denominator = 1 + ois_data[z] * aj(date, t4, t5, convention_ois)
-        nominator = 1 - (ois_data[z] * aj(date, 0, t1, convention_ois) * discount_factors[t1+3] + ois_data[z] * aj(date, t1, t2, convention_ois) * discount_factors[t2+3] + ois_data[z] * aj(date, t2, t3, convention_ois) * discount_factors[n-8] + ois_data[z] * aj(date, t3, t4, convention_ois) * discount_factors[n-4])
+        nominator = 1 - (ois_data[z] * aj(date, 0, t1, convention_ois) * discount_factors[t1+3] + ois_data[z] * aj(date, t1, t2, convention_ois) * discount_factors[t2+3] + ois_data[z] * aj(date, t2, t3, convention_ois) * discount_factors[z-8] + ois_data[z] * aj(date, t3, t4, convention_ois) * discount_factors[z-4])
         temp += 2
         discount_factors.append(nominator/denominator)
 
@@ -107,7 +110,7 @@ def bootstrap_ois_month(ois_data, date, convention_ois):
         nominator = 1 - ois_data[t] * sum_of_ajdf
         denominator = 1 + ois_data[t] * aj(date, temp*12, (temp+1)*12, convention_ois)
         df_ois = nominator / denominator
-        temp = 0
+        # temp = 0
         discount_factors.append(df_ois)
         year_disc_facs.append(df_ois)
 
